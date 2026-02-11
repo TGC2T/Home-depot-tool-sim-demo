@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AR Sawing: Dual Marker System</title>
+  <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
+
+  <script>
+    AFRAME.registerComponent('dual-marker-logic', {
+      schema: {
+        woodHardness: { type: 'number', default: 100 },
+        sawSharpness: { type: 'number', default: 5 }
+      },
+
+      init: function () {
+        // Scene references
+        this.woodAnchor = document.querySelector('#wood-anchor');
+        this.sawHand = document.querySelector('#saw-hand');
+        
+        // UI references
+        this.progressBar = document.querySelector('#progress-fill');
+        this.statusText = document.querySelector('#status-text');
+        this.guideText = document.querySelector('#guide-text');
+
+        // State
+        this.isSawing = false;
+        this.lastSawPosition = new THREE.Vector3();
+        this.cuts = 0;
+        this.requiredCuts = 50; // Scaled for AR motion
+        this.strokeDirection = 0;
+        
+        // Settings
+        this.currentSharpness = 5;
+        this.currentHardness = 50;
+      },
+
+      tick: function () {
+        // 1. Safety Check: Are both markers visible?
+        if (!this.woodAnchor.object3D.visible) {
+          this.guideText.innerText = "👀 Look at the Table Marker";
+          return;
+        }
+        if (!this.sawHand.object3D.visible) {
+          this.guideText.innerText = "✋ Bring Hand Marker into view";
+          return;
+        }
+
+        // 2. Get World Positions
+        const woodPos = new THREE.Vector3();
+        const sawPos = new THREE.Vector3();
+        
+        this.woodAnchor.object3D.getWorldPosition(woodPos);
+        this.sawHand.object3D.getWorldPosition(sawPos);
+
+        // 3. Calculate Distance (Is the saw touching the wood?)
+        const distance = woodPos.distanceTo(sawPos);
+        
+        // AR Distance Threshold (Adjust based on marker size, usually 0.3 is good)
+        if (distance < 0.4) { 
+          this.guideText.innerText = "Sawing Range Active";
+          this.calculateSawMotion(sawPos, woodPos);
+        } else {
+          this.guideText.innerText = "Move Hand Closer to Wood";
+        }
+      },
+
+      calculateSawMotion: function(sawPos, woodPos) {
+        // We track the change in distance relative to the wood center
+        // This simulates the "Back and Forth" motion regardless of angle
+        
+        // Determine vector from wood to saw
+        const relativeVec = new THREE.Vector3().subVectors(sawPos, woodPos);
+        const currentDistance = relativeVec.length();
+
+        if (!this.lastDistance) {
+            this.lastDistance = currentDistance;
+            return;
+        }
+
+        const delta = currentDistance - this.lastDistance;
+
+        // Filter out tiny jitters (AR drift)
+        if (Math.abs(delta) > 0.005) { 
+            const currentDir = Math.sign(delta); // 1 = Pulling away, -1 = Pushing in
+            
+            // If direction flipped (Back -> Forth)
+            if (this.strokeDirection !== 0 && currentDir !== this.strokeDirection) {
+                this.registerStroke();
+            }
+            this.strokeDirection = currentDir;
+        }
+
+        this.lastDistance = currentDistance;
+      },
+
+      registerStroke: function() {
+        this.cuts += this.currentSharpness;
+        
+        // Visuals
+        const percentage = Math.min((this.cuts / this.currentHardness) * 100, 100);
+        this.progressBar.style.width = percentage + "%";
+        
+        // "Haptic" Visual: Flash the saw color
+        const sawModel = document.querySelector('#saw-model');
+        sawModel.setAttribute('color', '#fff');
+        setTimeout(() => { sawModel.setAttribute('color', '#888'); }, 50);
+
+        if (this.cuts >= this.currentHardness) {
+            this.statusText.innerText = "CUT COMPLETE!";
+            this.statusText.style.color = "#00ff00";
+            document.querySelector('#virtual-wood').setAttribute('visible', 'false');
+        } else {
+            this.statusText.innerText = "Sawing...";
+        }
+      },
+      
+      // Menu Logic
+      updateSettings: function(sharpness, hardness, priceInfo) {
+          this.currentSharpness = sharpness;
+          this.currentHardness = hardness;
+          this.cuts = 0;
+          this.progressBar.style.width = "0%";
+          document.querySelector('#virtual-wood').setAttribute('visible', 'true');
+          this.statusText.innerText = priceInfo;
+          this.statusText.style.color = "white";
+      }
+    });
+
+    // Menu Handling
+    document.addEventListener('DOMContentLoaded', () => {
+        const component = document.querySelector('a-scene').components['dual-marker-logic'];
+        
+        document.getElementById('btn-pine').addEventListener('click', () => {
+             // Basic Saw vs Pine
+             document.querySelector('a-scene').emit('update-game', {s: 5, h: 50, p: 'Pine ($5) + Basic Saw'});
+        });
+        
+        document.getElementById('btn-oak').addEventListener('click', () => {
+             // Pro Saw vs Oak
+             document.querySelector('a-scene').emit('update-game', {s: 10, h: 100, p: 'Oak ($12) + Pro Saw'});
+        });
+
+        // Event listener bridge for A-Frame component
+        document.querySelector('a-scene').addEventListener('update-game', (e) => {
+            const logic = document.querySelector('[dual-marker-logic]').components['dual-marker-logic'];
+            logic.updateSettings(e.detail.s, e.detail.h, e.detail.p);
+        });
+    });
+  </script>
+
+  <style>
+    /* Left-Hand Optimized UI */
+    body { margin: 0; font-family: sans-serif; overflow: hidden; }
+    
+    #hud-layer {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none; z-index: 999;
+        display: flex; flex-direction: column; justify-content: space-between;
+    }
+
+    /* Top Status Bar */
+    .top-bar {
+        background: rgba(0,0,0,0.7); color: white; padding: 10px;
+        text-align: center; border-bottom: 2px solid #F96302;
+    }
+
+    /* Progress Bar */
+    .bar-bg {
+        width: 80%; height: 20px; background: #333; 
+        margin: 10px auto; border-radius: 10px; overflow: hidden; border: 1px solid white;
+    }
+    .bar-fill { width: 0%; height: 100%; background: #F96302; transition: width 0.1s; }
+
+    /* Left-Hand Menu Controls */
+    .menu-container {
+        pointer-events: auto;
+        padding: 20px;
+        display: flex; flex-direction: column; gap: 10px;
+        align-items: flex-start; /* Align to left for thumb access */
+    }
+
+    .menu-btn {
+        background: rgba(0,0,0,0.8); color: white;
+        border: 2px solid #F96302; padding: 15px 20px;
+        font-size: 16px; border-radius: 30px;
+        font-weight: bold; width: 180px; text-align: left;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+    }
+    .menu-btn:active { background: #F96302; color: black; }
+
+    #guide-text { font-size: 18px; color: yellow; font-weight: bold; text-shadow: 1px 1px 0 #000; }
+  </style>
+</head>
+<body>
+
+  <div id="hud-layer">
+    <div class="top-bar">
+        <div id="status-text">Select Material to Begin</div>
+        <div class="bar-bg"><div id="progress-fill" class="bar-fill"></div></div>
+        <div id="guide-text">Locate Anchors</div>
+    </div>
+
+    <div class="menu-container">
+        <button id="btn-pine" class="menu-btn">🌲 Soft Pine<br><span style="font-size:12px; font-weight:normal">Basic Saw ($19)</span></button>
+        <button id="btn-oak" class="menu-btn">🌳 Hard Oak<br><span style="font-size:12px; font-weight:normal">Pro Saw ($49)</span></button>
+    </div>
+  </div>
+
+  <a-scene 
+    dual-marker-logic
+    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 2; uiScanning: no;" 
+    color-space="sRGB" 
+    renderer="colorManagement: true, physicallyCorrectLights: true" 
+    vr-mode-ui="enabled: false">
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-light type="directional" position="0 0 0" intensity="1"></a-light>
+
+    <a-entity id="wood-anchor" mindar-image-target="targetIndex: 0">
+        <a-box position="0 -0.2 0" scale="2 0.4 1.5" color="#333"></a-box>
+        <a-box id="virtual-wood" position="0 0.1 0" scale="1.5 0.1 0.4" color="#F4E3C1"></a-box>
+        
+        <a-ring color="#00FF00" radius-inner="0.3" radius-outer="0.32" rotation="-90 0 0" opacity="0.5"></a-ring>
+    </a-entity>
+
+    <a-entity id="saw-hand" mindar-image-target="targetIndex: 1">
+        <a-entity id="saw-model" position="0 0 0.2" rotation="0 -90 0">
+            <a-box position="0 0 0" scale="0.1 0.3 0.1" color="#F96302"></a-box>
+            <a-box position="0.3 0 0" scale="0.6 0.2 0.02" color="#888"></a-box>
+        </a-entity>
+    </a-entity>
+
+  </a-scene>
+
+</body>
+</html>
